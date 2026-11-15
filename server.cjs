@@ -22,7 +22,7 @@ function createApp({dataDir=process.env.DATA_DIR||path.join(__dirname,'data'),or
   if(!initialPassword)fs.writeFileSync(path.join(dataDir,'bootstrap.txt'),'Username: '+username+'\nPassword: '+password+'\nChange this password after the first login.\n',{mode:0o600});
  }
  db.prepare('UPDATE account SET username=? WHERE username IS NULL').run(username);
- const accountName=db.prepare('SELECT username FROM account').get().username;
+ let accountName=db.prepare('SELECT username FROM account').get().username;
  const allowed=new Set(originList),attempts=new Map();
  function acceptsOrigin(req){
   try{
@@ -65,7 +65,25 @@ function createApp({dataDir=process.env.DATA_DIR||path.join(__dirname,'data'),or
     const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('studio_session='))?.slice(15)||'';
     if(!db.prepare('SELECT token FROM auth WHERE token=? AND expires>?').get(hash(token),Date.now()))throw fail(401,'请先登录。');
     if(p==='/api/logout'&&req.method==='POST'){db.prepare('DELETE FROM auth WHERE token=?').run(hash(token));res.setHeader('Set-Cookie',cookie(req,'',0));return json(res,200,{ok:true});}
-    if(p==='/api/password'&&req.method==='POST'){const b=await body(req,4096),a=db.prepare('SELECT * FROM account').get();if(typeof b.old!=='string'||b.old.length>256||!timingSafeEqual(scryptSync(b.old,a.salt,64),Buffer.from(a.password,'hex')))throw fail(400,'当前密码不正确。');if(typeof b.password!=='string'||b.password.length<12||b.password.length>128)throw fail(400,'新密码需要 12–128 个字符。');const salt=randomBytes(16).toString('hex');db.prepare('UPDATE account SET salt=?,password=?').run(salt,scryptSync(b.password,salt,64).toString('hex'));db.exec('DELETE FROM auth');res.setHeader('Set-Cookie',cookie(req,'',0));fs.rmSync(path.join(dataDir,'bootstrap.txt'),{force:true});return json(res,200,{ok:true});}
+    if((p==='/api/account'||p==='/api/password')&&req.method==='POST'){
+     const b=await body(req,4096),a=db.prepare('SELECT * FROM account').get();
+     // Recheck after reading the body: another device may have changed credentials.
+     if(!db.prepare('SELECT token FROM auth WHERE token=? AND expires>?').get(hash(token),Date.now()))throw fail(401,'登录信息已更新，请重新登录。');
+     if(typeof b.old!=='string'||b.old.length>256||!timingSafeEqual(scryptSync(b.old,a.salt,64),Buffer.from(a.password,'hex')))throw fail(400,'当前密码不正确。');
+     const nextName=p==='/api/password'?a.username:b.username;
+     if(typeof nextName!=='string'||!/^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$/.test(nextName))throw fail(400,'账号需要 3–32 位英文字母、数字、点、下划线或短横线，并以字母或数字开头。');
+     const changePassword=p==='/api/password'||b.password!==undefined;
+     if(changePassword&&(typeof b.password!=='string'||b.password.length<12||b.password.length>128))throw fail(400,'新密码需要 12–128 个字符。');
+     if(nextName===a.username&&!changePassword)throw fail(400,'请修改账号或填写新密码。');
+     const salt=changePassword?randomBytes(16).toString('hex'):a.salt;
+     const passwordHash=changePassword?scryptSync(b.password,salt,64).toString('hex'):a.password;
+     db.exec('BEGIN IMMEDIATE');
+     try{db.prepare('UPDATE account SET username=?,salt=?,password=? WHERE id=1').run(nextName,salt,passwordHash);db.exec('DELETE FROM auth');db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+     accountName=nextName;
+     res.setHeader('Set-Cookie',cookie(req,'',0));
+     fs.rmSync(path.join(dataDir,'bootstrap.txt'),{force:true});
+     return json(res,200,{ok:true,username:accountName});
+    }
     if(p==='/api/state'&&req.method==='GET')return json(res,200,state());
     if(p==='/api/state'&&req.method==='PUT'){const b=await body(req,2*1024*1024);const data=validate(b.state);revision(b.revision);update(data);return json(res,200,state());}
     if(p==='/api/art'&&req.method==='POST'){

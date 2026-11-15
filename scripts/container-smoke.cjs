@@ -42,6 +42,15 @@ let created=false;
  const bytes=Buffer.from(await (await req('/api/art/'+id,'GET',undefined,cookie)).arrayBuffer());assert.ok(bytes.equals(Buffer.from(art.split(',')[1],'base64')));
  const backup=await (await req('/api/export','GET',undefined,cookie)).json();assert.equal(backup.art[0].image,art);
  assert.equal((await req('/data/bootstrap.txt')).status,404);
- console.log('PASS: container login, save, original upload, private access, conflicts, restart persistence and export.');
+ const changedPassword='Container-changed-password!';
+ assert.equal((await req('/api/account','POST',{old:password,username:'container_artist',password:changedPassword},cookie)).status,200);
+ assert.equal((await req('/api/state','GET',undefined,cookie)).status,401);
+ docker('restart',name);await ready();
+ assert.equal((await req('/api/login','POST',{username:'artist',password})).status,401);
+ const renamedLogin=await req('/api/login','POST',{username:'container_artist',password:changedPassword});assert.equal(renamedLogin.status,200);
+ const renamedCookie=renamedLogin.headers.get('set-cookie').split(';')[0];
+ const preserved=await (await req('/api/state','GET',undefined,renamedCookie)).json();
+ assert.equal(preserved.username,'container_artist');assert.equal(preserved.sessions.length,1);assert.equal(preserved.art[0].id,id);
+ console.log('PASS: container login, save, upload, private access, conflicts, restart persistence, export and account changes.');
 }finally{if(created)docker('rm','-f',name);docker('volume','rm',volume);}
 })().catch(e=>{console.error(e.message);process.exitCode=1});

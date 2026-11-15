@@ -81,3 +81,44 @@ test('custom bootstrap account is persisted and malformed JSON objects are rejec
   assert.equal(fs.readFileSync(path.join(base,'bootstrap.txt'),'utf8'),credentials);
  }finally{await app.close();const resolved=path.resolve(base);assert.ok(resolved.startsWith(path.resolve(os.tmpdir())+path.sep+'drawing-studio-test-'));fs.rmSync(resolved,{recursive:true,force:true});}
 });
+
+test('account edits validate first, preserve artwork, invalidate sessions and survive restart',async()=>{
+ const base=fs.mkdtempSync(path.join(os.tmpdir(),'drawing-studio-test-'));
+ let app=createApp({dataDir:base,origins:'http://test.local'}),url;
+ async function open(){await new Promise(r=>app.server.listen(0,'127.0.0.1',r));url='http://127.0.0.1:'+app.server.address().port;}
+ await open();
+ const password=fs.readFileSync(path.join(base,'bootstrap.txt'),'utf8').match(/^Password: (.+)$/m)[1];
+ const req=(p,method='GET',data,cookie)=>fetch(url+p,{method,headers:{Origin:'http://test.local','Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:data===undefined?undefined:JSON.stringify(data)});
+ async function login(username='artist',pw=password){const r=await req('/api/login','POST',{username,password:pw});assert.equal(r.status,200);return r.headers.get('set-cookie').split(';')[0];}
+ try{
+  assert.equal((await req('/api/account','POST',{old:password,username:'new_artist'})).status,401);
+  const a=await login(),b=await login();
+  let state=await (await req('/api/state','GET',undefined,a)).json();
+  state.sessions.push({id:'keep-me',lesson:'M1',date:'2026-11-15',minutes:25,note:'留下这次练习'});
+  state=await (await req('/api/state','PUT',{revision:state.revision,state},a)).json();
+  const image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
+  let r=await req('/api/art','POST',{revision:state.revision,image,title:'Keep artwork',type:'草图',lesson:'M1',note:''},a);assert.equal(r.status,201);state=await r.json();
+  const unchanged=await (await req('/api/export','GET',undefined,a)).json();
+  const invalid=[{old:'wrong-password',username:'new_artist'},...['ab',' name','name/','名字','a'.repeat(33),null,[]].map(username=>({old:password,username})),{old:password,username:'new_artist',password:''},{old:password,username:'new_artist',password:'short'},{old:password,username:'new_artist',password:null},{old:password,username:'artist'}];
+  for(const data of invalid){assert.equal((await req('/api/account','POST',data,a)).status,400);assert.deepEqual(await (await req('/api/export','GET',undefined,b)).json(),unchanged);}
+  assert.ok(fs.existsSync(path.join(base,'bootstrap.txt')));
+  r=await req('/api/account','POST',{old:password,username:'new_artist'},a);assert.equal(r.status,200);assert.deepEqual(await r.json(),{ok:true,username:'new_artist'});assert.match(r.headers.get('set-cookie'),/Max-Age=0/);
+  assert.ok(!fs.existsSync(path.join(base,'bootstrap.txt')));
+  for(const cookie of [a,b])assert.equal((await req('/api/state','GET',undefined,cookie)).status,401);
+  assert.equal((await req('/api/login','POST',{username:'artist',password})).status,401);
+  const renamed=await login('new_artist');
+  assert.deepEqual(await (await req('/api/export','GET',undefined,renamed)).json(),{...unchanged,username:'new_artist'});
+  await app.close();app=createApp({dataDir:base,origins:'http://test.local',username:'ignored_after_restart'});await open();
+  assert.deepEqual(await (await req('/api/export','GET',undefined,renamed)).json(),{...unchanged,username:'new_artist'});
+  const newPassword='A-new-long-password!';
+  r=await req('/api/account','POST',{old:password,username:'new_artist',password:newPassword},renamed);assert.equal(r.status,200);
+  assert.equal((await req('/api/state','GET',undefined,renamed)).status,401);
+  assert.equal((await req('/api/login','POST',{username:'new_artist',password})).status,401);
+  const updated=await login('new_artist',newPassword);
+  r=await req('/api/account','POST',{old:newPassword,username:'final_artist',password:'Another-long-password!'},updated);assert.equal(r.status,200);
+  assert.equal((await req('/api/state','GET',undefined,updated)).status,401);
+  await app.close();app=createApp({dataDir:base,origins:'http://test.local'});await open();
+  const final=await login('final_artist','Another-long-password!');
+  assert.deepEqual(await (await req('/api/export','GET',undefined,final)).json(),{...unchanged,username:'final_artist'});
+ }finally{await app.close();const resolved=path.resolve(base);assert.ok(resolved.startsWith(path.resolve(os.tmpdir())+path.sep+'drawing-studio-test-'));fs.rmSync(resolved,{recursive:true,force:true});}
+});
