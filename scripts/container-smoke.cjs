@@ -7,7 +7,21 @@ const origin='http://localhost:4175';let created=false;
  docker('volume','create',volume);
  docker('run','-d','--name',name,'-p','127.0.0.1::4175','-e','INIT_USERNAME=container_artist','-e','APP_ORIGINS='+origin,'-e','COOKIE_SECURE=false','--mount','type=volume,source='+volume+',target=/app/data',image);created=true;
  const port=docker('inspect','--format','{{(index (index .NetworkSettings.Ports "4175/tcp") 0).HostPort}}',name),base='http://127.0.0.1:'+port;
- async function ready(){for(let n=0;n<60;n++){try{if((await fetch(base+'/health')).ok)return}catch{}await new Promise(r=>setTimeout(r,1000))}throw Error('Container did not become healthy');}
+ async function ready(){
+  let reason='No response from /health';
+  for(let n=0;n<30;n++){
+   try{
+    const response=await fetch(base+'/health',{signal:AbortSignal.timeout(2000)});
+    if(response.ok)return;
+    reason='GET /health returned HTTP '+response.status;
+   }catch(error){reason=error.cause?.message||error.message;}
+   if(docker('inspect','--format','{{.State.Running}}',name)!=='true')break;
+   await new Promise(r=>setTimeout(r,1000));
+  }
+  console.error(docker('inspect','--format','{{json .State}}',name));
+  console.error(docker('logs',name));
+  throw Error('Container did not become healthy: '+reason);
+ }
  await ready();
  const bootstrap=docker('exec',name,'cat','/app/data/bootstrap.txt'),password=bootstrap.match(/^Password: (.+)$/m)?.[1];assert.ok(password);
  const req=(p,method='GET',data,cookie)=>fetch(base+p,{method,headers:{Origin:origin,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:data===undefined?undefined:JSON.stringify(data)});
