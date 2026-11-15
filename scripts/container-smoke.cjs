@@ -6,8 +6,11 @@ const origin='http://localhost:4175';let created=false;
 (async()=>{try{
  docker('volume','create',volume);
  docker('run','-d','--name',name,'-p','127.0.0.1::4175','-e','INIT_USERNAME=container_artist','-e','APP_ORIGINS='+origin,'-e','COOKIE_SECURE=false','--mount','type=volume,source='+volume+',target=/app/data',image);created=true;
- const port=docker('inspect','--format','{{(index (index .NetworkSettings.Ports "4175/tcp") 0).HostPort}}',name),base='http://127.0.0.1:'+port;
+ let base;
  async function ready(){
+  // Docker can reassign an ephemeral host port when the container restarts.
+  const port=docker('inspect','--format','{{(index (index .NetworkSettings.Ports "4175/tcp") 0).HostPort}}',name);
+  base='http://127.0.0.1:'+port;
   let reason='No response from /health';
   for(let n=0;n<30;n++){
    try{
@@ -19,7 +22,8 @@ const origin='http://localhost:4175';let created=false;
    await new Promise(r=>setTimeout(r,1000));
   }
   console.error(docker('inspect','--format','{{json .State}}',name));
-  console.error(docker('logs',name));
+  const logs=require('node:child_process').spawnSync('docker',['logs',name],{encoding:'utf8'});
+  console.error(logs.stdout,logs.stderr);
   throw Error('Container did not become healthy: '+reason);
  }
  await ready();
