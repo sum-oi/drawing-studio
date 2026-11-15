@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0-beta.2
+
+- 默认直接通过内网 IP:4175 使用，无需填写域名、监听 IP 或账号环境变量。
+- 自动校验同主机来源，支持保留 Host 的 Lucky HTTPS 反向代理；HTTPS 登录自动设置 Secure Cookie。
+- 容器测试覆盖零环境变量启动、登录和持久化。
+
 ## 0.3.0-beta.1
 
 Initial public beta:

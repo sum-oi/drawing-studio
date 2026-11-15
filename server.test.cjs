@@ -1,5 +1,32 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const {createApp}=require('./server.cjs');
+test('zero-config LAN and HTTPS proxy login, save, logout and cross-site rejection',async()=>{
+ const base=fs.mkdtempSync(path.join(os.tmpdir(),'drawing-studio-test-')),password='Test-only-long-password!';
+ const app=createApp({dataDir:base,origins:'',secure:'auto',initialPassword:password});
+ await new Promise(r=>app.server.listen(0,'127.0.0.1',r));
+ const request=(method,p,headers,data)=>new Promise((resolve,reject)=>{
+  const req=require('node:http').request({hostname:'127.0.0.1',port:app.server.address().port,path:p,method,headers:{'Content-Type':'application/json',...headers}},res=>{
+   let body='';res.on('data',chunk=>body+=chunk);res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:JSON.parse(body)}));
+  });req.on('error',reject);req.end(data===undefined?undefined:JSON.stringify(data));
+ });
+ try{
+  for(const origin of ['http://192.168.1.20:4175','https://draw.example.com','https://draw.example.com:8443','http://[::1]:4175']){
+   const headers={Host:new URL(origin).host,Origin:origin};
+   let r=await request('POST','/api/login',headers,{username:'artist',password});assert.equal(r.status,200);
+   const cookie=r.headers['set-cookie'][0];assert.equal(cookie.includes('; Secure'),origin.startsWith('https:'));
+   headers.Cookie=cookie.split(';')[0];r=await request('GET','/api/state',headers);
+   assert.equal(r.status,200);
+   r=await request('PUT','/api/state',headers,{revision:r.body.revision,state:r.body});assert.equal(r.status,200);
+   r=await request('POST','/api/logout',headers,{});assert.equal(r.status,200);
+   assert.equal(r.headers['set-cookie'][0].includes('; Secure'),origin.startsWith('https:'));
+  }
+  for(const origin of [undefined,'null','https://evil.test','http://192.168.1.20:4176','http://192.168.1.20:4175/path']){
+   const headers={Host:'192.168.1.20:4175',...(origin?{Origin:origin}:{})};
+   const r=await request('POST','/api/login',headers,{username:'artist',password});assert.equal(r.status,403);
+  }
+  const spoofed=await request('POST','/api/login',{Host:'192.168.1.20:4175',Origin:'https://evil.test','X-Forwarded-Host':'evil.test'},{username:'artist',password});assert.equal(spoofed.status,403);
+ }finally{await app.close();const resolved=path.resolve(base);assert.ok(resolved.startsWith(path.resolve(os.tmpdir())+path.sep+'drawing-studio-test-'));fs.rmSync(resolved,{recursive:true,force:true});}
+});
 test('real HTTP: login, private artwork, cross-device state, conflicts, restart, export, password rotation',async()=>{
  const base=fs.mkdtempSync(path.join(os.tmpdir(),'drawing-studio-test-')),password='Test-only-long-password!';
  let app=createApp({dataDir:base,origins:'http://test.local',initialPassword:password});

@@ -3,7 +3,7 @@
 自托管的绘画练习室：把课程、练习记录、作品和复盘放在同一处。
 适合在 iPad 与 PC 上使用同一个账号，按自己的节奏练习。
 
-**公开测试版：0.3.0-beta.1。** 当前每个实例支持一个私人账号。
+**公开测试版：0.3.0-beta.2。** 当前每个实例支持一个私人账号。
 
 ## 功能
 
@@ -20,62 +20,45 @@ JSON 导出目前没有一键恢复界面，完整实例通过数据库备份恢
 
 ## Docker 部署
 
-镜像：`sumcheung/drawing-studio:0.3.0-beta.1`。
+镜像：`sumcheung/drawing-studio:0.3.0-beta.2`。
 发布工作流分别测试 `linux/amd64` 和 `linux/arm64` 镜像，
 均通过后才推送固定版本标签。
 
-下载本仓库的 `compose.yaml` 与 `.env.example`，复制配置：
+下载本仓库的 `compose.yaml`，在该目录执行：
 
 ```sh
-cp .env.example .env
-# 编辑 .env，填写你自己的 HTTPS 域名和首次创建的账号名
-docker compose pull
 docker compose up -d
 docker compose exec drawing-studio cat /app/data/bootstrap.txt
 ```
 
-最后一条命令仅在你自己的终端显示随机初始密码。通过域名登录后，
-在“账户与备份”修改密码，初始化文件会自动删除。
+浏览器打开 `http://服务器内网IP:4175`，默认用户名为 `artist`。
+最后一条命令显示随机初始密码。登录后在“账户与备份”修改密码。
+默认使用 Docker 命名卷保存数据，无需创建 `.env`。
 
-默认使用 Docker 命名卷保存数据；镜像和公开仓库不包含账号或作品。
-`INIT_USERNAME` 只在首次初始化时生效，已有数据库不会随环境变量改名。
-本项目不会把真实密码放入镜像或环境变量。
+### Lucky / HTTPS 反向代理（可选）
 
-### 接入已有 HTTPS 反向代理
-
-```dotenv
-APP_ORIGINS=https://draw.example.com
-COOKIE_SECURE=true
-INIT_USERNAME=artist
-BIND_ADDRESS=127.0.0.1
-IMAGE_TAG=0.3.0-beta.1
-```
-
-将示例域名替换为实际地址，不带路径和末尾斜杠。
-让反向代理转发到宿主机 4175 端口，保留 Cookie 和 Origin 请求头；
+在 Lucky 中将你的域名转发到 `http://应用服务器内网IP:4175`。
+反代可以运行在另一台服务器。保留原始 Host、Origin 和 Cookie 请求头，
 上传请求体上限至少 16 MB，超时至少 60 秒。应用限制单图 10 MB。
 
-默认只监听宿主机回环地址。若反向代理在另一台机器或容器，
-将 `BIND_ADDRESS` 改为可达的宿主机 LAN 地址，或者使用共同的 Docker
-网络；限制后端端口只接受反向代理流量。不要将 HTTP 后端直接暴露到公网。
-内网与外网使用同一 HTTPS 域名，访问同一实例的数据。
+应用默认校验请求来源与访问的主机名、端口一致；HTTP 内网登录和 HTTPS
+域名登录均可使用。HTTPS 登录自动设置 Secure Cookie，无需预填域名。
 
-临时局域网 HTTP 试用时，把 `APP_ORIGINS` 设置成实际 HTTP 地址，
-同时设 `COOKIE_SECURE=false`；正式域名部署改回 HTTPS。
+需要固定来源白名单或自定义首次账号时，可在 Compose 的 `environment`
+中按需设置 `APP_ORIGINS`、`COOKIE_SECURE`、`INIT_USERNAME`，见 `.env.example`
+内的可选配置说明。默认部署不需要这些设置。已有账号不随环境变量改名。
 
 ### 从源码构建
 
 ```sh
 git clone https://github.com/sum-oi/drawing-studio.git
 cd drawing-studio
-cp .env.example .env
-# 填写 .env
 docker compose -f compose.yaml -f compose.build.yaml up -d --build
 ```
 
 ## 更新、备份与恢复
 
-更新前先备份数据，修改 `.env` 中的 `IMAGE_TAG` 为目标版本：
+更新前先备份数据，修改 `compose.yaml` 中的镜像标签为目标版本：
 
 ```sh
 docker compose pull

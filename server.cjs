@@ -4,10 +4,11 @@ const {DatabaseSync}=require('node:sqlite');
 const {randomBytes,randomUUID,scryptSync,timingSafeEqual,createHash}=require('node:crypto');
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const fail=(status,message)=>Object.assign(new Error(message),{status});
-function createApp({dataDir=process.env.DATA_DIR||path.join(__dirname,'data'),origins=process.env.APP_ORIGINS||'http://localhost:4175,http://127.0.0.1:4175',secure=process.env.COOKIE_SECURE==='true',username=process.env.INIT_USERNAME||'artist',initialPassword}={}){
+function createApp({dataDir=process.env.DATA_DIR||path.join(__dirname,'data'),origins=process.env.APP_ORIGINS||'',secure=process.env.COOKIE_SECURE||'auto',username=process.env.INIT_USERNAME||'artist',initialPassword}={}){
  if(!/^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$/.test(username))throw Error('INIT_USERNAME must be 3-32 letters, digits, dots, underscores or hyphens.');
- const originList=origins.split(',').map(s=>s.trim());
- for(const origin of originList){const u=new URL(origin);if(u.origin!==origin||!['http:','https:'].includes(u.protocol))throw Error('APP_ORIGINS must contain exact http(s) origins without paths.');if(secure&&u.protocol!=='https:')throw Error('COOKIE_SECURE=true requires HTTPS origins.');}
+ const originList=origins.split(',').map(s=>s.trim()).filter(Boolean);
+ if(![true,false,'true','false','auto'].includes(secure))throw Error('COOKIE_SECURE must be auto, true or false.');
+ for(const origin of originList){const u=new URL(origin);if(u.origin!==origin||!['http:','https:'].includes(u.protocol))throw Error('APP_ORIGINS must contain exact http(s) origins without paths.');if((secure===true||secure==='true')&&u.protocol!=='https:')throw Error('COOKIE_SECURE=true requires HTTPS origins.');}
  fs.mkdirSync(dataDir,{recursive:true});
  const db=new DatabaseSync(path.join(dataDir,'studio.sqlite'));
  db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
@@ -23,7 +24,18 @@ function createApp({dataDir=process.env.DATA_DIR||path.join(__dirname,'data'),or
  db.prepare('UPDATE account SET username=? WHERE username IS NULL').run(username);
  const accountName=db.prepare('SELECT username FROM account').get().username;
  const allowed=new Set(originList),attempts=new Map();
- const cookie=(token,age=604800)=>'studio_session='+token+'; Path=/; HttpOnly; SameSite=Strict; Max-Age='+age+(secure?'; Secure':'');
+ function acceptsOrigin(req){
+  try{
+   const origin=new URL(req.headers.origin);
+   if(origin.origin!==req.headers.origin||!['http:','https:'].includes(origin.protocol))return false;
+   // Explicit origins restrict access; otherwise the proxy must preserve Host.
+   return allowed.size?allowed.has(origin.origin):origin.host===req.headers.host;
+  }catch{return false;}
+ }
+ const cookie=(req,token,age=604800)=>{
+  const useSecure=secure==='auto'?(req.socket.encrypted||req.headers.origin?.startsWith('https://')):secure===true||secure==='true';
+  return 'studio_session='+token+'; Path=/; HttpOnly; SameSite=Strict; Max-Age='+age+(useSecure?'; Secure':'');
+ };
  function state(){const row=db.prepare('SELECT revision,data FROM progress WHERE id=1').get();return {username:accountName,revision:row.revision,...JSON.parse(row.data),art:db.prepare('SELECT id,meta FROM artworks ORDER BY rowid').all().map(a=>({id:a.id,...JSON.parse(a.meta)}))};}
  function revision(r){if(!Number.isInteger(r)||db.prepare('SELECT revision FROM progress').get().revision!==r)throw fail(409,'另一台设备更新了记录，请先同步最新内容，再重试。');}
  function update(data){db.prepare('UPDATE progress SET data=?,revision=revision+1 WHERE id=1').run(JSON.stringify(data));}
@@ -40,20 +52,20 @@ function createApp({dataDir=process.env.DATA_DIR||path.join(__dirname,'data'),or
   res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');
   try{
    const url=new URL(req.url,'http://localhost'),p=url.pathname,write=!['GET','HEAD'].includes(req.method);
-   if(write&&!allowed.has(req.headers.origin))throw fail(403,'访问地址未被允许，请使用配置好的应用地址。');
+   if(write&&!acceptsOrigin(req))throw fail(403,'请求来源与访问地址不一致，请检查反向代理是否保留 Host 请求头。');
    if(p==='/api/login'&&req.method==='POST'){
     const ip=req.socket.remoteAddress,now=Date.now();for(const [k,v] of attempts)if(v.until<now)attempts.delete(k);
     const a=attempts.get(ip)||{count:0,until:now+900000};if(a.count>=10)throw fail(429,'尝试次数过多，请 15 分钟后再试。');a.count++;attempts.set(ip,a);
     const b=await body(req,4096),account=db.prepare('SELECT * FROM account').get();
     if(typeof b.password!=='string'||b.password.length>256||b.username!==accountName||!timingSafeEqual(scryptSync(b.password,account.salt,64),Buffer.from(account.password,'hex')))throw fail(401,'账号或密码不正确。');
-    attempts.delete(ip);const token=randomBytes(32).toString('hex');db.prepare('DELETE FROM auth WHERE expires<?').run(now);db.prepare('INSERT INTO auth VALUES(?,?)').run(hash(token),now+604800000);res.setHeader('Set-Cookie',cookie(token));return json(res,200,{username:accountName});
+    attempts.delete(ip);const token=randomBytes(32).toString('hex');db.prepare('DELETE FROM auth WHERE expires<?').run(now);db.prepare('INSERT INTO auth VALUES(?,?)').run(hash(token),now+604800000);res.setHeader('Set-Cookie',cookie(req,token));return json(res,200,{username:accountName});
    }
    if(p==='/health'&&req.method==='GET')return json(res,200,{status:'ok',version:require('./package.json').version});
    if(p.startsWith('/api/')){
     const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('studio_session='))?.slice(15)||'';
     if(!db.prepare('SELECT token FROM auth WHERE token=? AND expires>?').get(hash(token),Date.now()))throw fail(401,'请先登录。');
-    if(p==='/api/logout'&&req.method==='POST'){db.prepare('DELETE FROM auth WHERE token=?').run(hash(token));res.setHeader('Set-Cookie',cookie('',0));return json(res,200,{ok:true});}
-    if(p==='/api/password'&&req.method==='POST'){const b=await body(req,4096),a=db.prepare('SELECT * FROM account').get();if(typeof b.old!=='string'||b.old.length>256||!timingSafeEqual(scryptSync(b.old,a.salt,64),Buffer.from(a.password,'hex')))throw fail(400,'当前密码不正确。');if(typeof b.password!=='string'||b.password.length<12||b.password.length>128)throw fail(400,'新密码需要 12–128 个字符。');const salt=randomBytes(16).toString('hex');db.prepare('UPDATE account SET salt=?,password=?').run(salt,scryptSync(b.password,salt,64).toString('hex'));db.exec('DELETE FROM auth');res.setHeader('Set-Cookie',cookie('',0));fs.rmSync(path.join(dataDir,'bootstrap.txt'),{force:true});return json(res,200,{ok:true});}
+    if(p==='/api/logout'&&req.method==='POST'){db.prepare('DELETE FROM auth WHERE token=?').run(hash(token));res.setHeader('Set-Cookie',cookie(req,'',0));return json(res,200,{ok:true});}
+    if(p==='/api/password'&&req.method==='POST'){const b=await body(req,4096),a=db.prepare('SELECT * FROM account').get();if(typeof b.old!=='string'||b.old.length>256||!timingSafeEqual(scryptSync(b.old,a.salt,64),Buffer.from(a.password,'hex')))throw fail(400,'当前密码不正确。');if(typeof b.password!=='string'||b.password.length<12||b.password.length>128)throw fail(400,'新密码需要 12–128 个字符。');const salt=randomBytes(16).toString('hex');db.prepare('UPDATE account SET salt=?,password=?').run(salt,scryptSync(b.password,salt,64).toString('hex'));db.exec('DELETE FROM auth');res.setHeader('Set-Cookie',cookie(req,'',0));fs.rmSync(path.join(dataDir,'bootstrap.txt'),{force:true});return json(res,200,{ok:true});}
     if(p==='/api/state'&&req.method==='GET')return json(res,200,state());
     if(p==='/api/state'&&req.method==='PUT'){const b=await body(req,2*1024*1024);const data=validate(b.state);revision(b.revision);update(data);return json(res,200,state());}
     if(p==='/api/art'&&req.method==='POST'){
