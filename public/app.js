@@ -33,11 +33,57 @@ function restartFeedbackDraft(){
  if(form){const lesson=form.dataset.lesson;sessionStorage.setItem('studio-feedback-'+lesson,JSON.stringify({requestId:requestId(),title:$('#feedbacktitle').value,body:$('#feedbackbody').value}));$('#modal').close();newFeedback(lesson)}
  else if(reply){const id=reply.dataset.feedbackId;sessionStorage.setItem('studio-feedback-reply-'+id,JSON.stringify({requestId:requestId(),body:$('#replybody').value}));$('#modal').close();replyFeedback(id)}
 }
-function feedbackSettings(){action(async()=>{
- const config=await api('/api/feedback/settings');
- modal('<h2>连接私有反馈仓库</h2><p>由部署者设置一次。之后使用者可以直接在网页里提交反馈、查看回复。</p><form id="feedbacksettings"><div class="field"><label for="feedbackrepo">GitHub 私有仓库</label><input id="feedbackrepo" required placeholder="账号/仓库名" value="'+esc(config.repo)+'"></div><div class="field"><label for="feedbacktoken">仓库访问令牌</label><input id="feedbacktoken" type="password" autocomplete="off" required maxlength="500"><small>使用仅能访问这个私有仓库、具有 Issues 读写权限的令牌。令牌只保存在服务器。</small></div><div class="field"><label for="feedbackpassword">当前登录密码</label><input id="feedbackpassword" type="password" autocomplete="current-password" required></div><button class="primary">验证并连接</button></form>'+(config.configured?'<button class="ghost" onclick="disconnectFeedback()">断开连接</button>':''));
- $('#feedbacksettings').onsubmit=e=>{e.preventDefault();action(async()=>{await api('/api/feedback/settings','POST',{repo:$('#feedbackrepo').value.trim(),token:$('#feedbacktoken').value.trim(),password:$('#feedbackpassword').value});$('#modal').close();feedbackData=null;message('已连接私有反馈仓库。之前保存的反馈可在“我的反馈”里重新发送。')})};
-})}
+function feedbackSettings() {
+ action(async () => {
+  const config = await api('/api/feedback/settings');
+  modal(`
+   <h2>连接私有反馈仓库</h2>
+   <p>部署者设置后，使用者就可以在绘画练习室提交反馈、查看回复。</p>
+   <details class="feedback-guide">
+    <summary>查看详细教程：创建令牌并连接</summary>
+    <ol>
+     <li><strong>打开令牌创建页。</strong> 用拥有私有反馈仓库的 GitHub 账号登录，打开 <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">创建细粒度令牌（在新标签页打开）</a>。<b>Token name</b> 可填 Drawing Studio Feedback，再选一个到期日。</li>
+     <li><strong>只授权反馈仓库。</strong> 在 <b>Resource owner</b> 选仓库所属账号。在 <b>Repository access</b> 选 <b>Only select repositories</b>，只勾选你用来收反馈的私有仓库。</li>
+     <li><strong>允许发送和读取反馈。</strong> 在 <b>Permissions</b> 里点 <b>Add permissions</b>，添加 <b>Issues</b> 并设为 <b>Read and write</b>。保留默认的 <b>Metadata</b> 读取权限。点 <b>Generate token</b>，复制生成的完整令牌。</li>
+     <li><strong>回到此窗口填写。</strong> 第一栏填 GitHub 的仓库路径，比如 <code>your-name/drawing-studio-feedback</code>。第二栏粘贴刚复制的令牌。第三栏填绘画练习室的登录密码。点“验证并连接”。</li>
+     <li><strong>发送一条测试反馈。</strong> 到“我的反馈 → 写反馈”提交测试文字。看到“待处理”后，打开私有仓库的 <b>Issues</b>，确认收到了。之前显示“尚未发送”的反馈，可以点各自下方的“重新发送”。</li>
+    </ol>
+    <p><strong>连接不上时</strong>，检查令牌是否过期、是否勾选了正确的私有仓库，以及仓库是否已开启 Issues。令牌到期后，在这里填入新令牌并重新连接。</p>
+   </details>
+   <form id="feedbacksettings">
+    <div class="field">
+     <label for="feedbackrepo">GitHub 私有仓库</label>
+     <input id="feedbackrepo" required placeholder="账号/仓库名" value="${esc(config.repo)}">
+     <small>填写账号和仓库名，省略网址开头与 /issues。</small>
+    </div>
+    <div class="field">
+     <label for="feedbacktoken">仓库访问令牌</label>
+     <input id="feedbacktoken" type="password" autocomplete="off" required maxlength="500">
+     <small>粘贴 GitHub 生成的完整令牌。令牌保存在服务器，请只在这里填写。</small>
+    </div>
+    <div class="field">
+     <label for="feedbackpassword">绘画练习室的登录密码</label>
+     <input id="feedbackpassword" type="password" autocomplete="current-password" required>
+    </div>
+    <button class="primary">验证并连接</button>
+   </form>
+   ${config.configured ? '<button class="ghost" onclick="disconnectFeedback()">断开连接</button>' : ''}
+  `);
+  $('#feedbacksettings').onsubmit = event => {
+   event.preventDefault();
+   action(async () => {
+    await api('/api/feedback/settings', 'POST', {
+     repo: $('#feedbackrepo').value.trim(),
+     token: $('#feedbacktoken').value.trim(),
+     password: $('#feedbackpassword').value
+    });
+    $('#modal').close();
+    feedbackData = null;
+    message('已连接私有反馈仓库。可以到“我的反馈”发送一条测试反馈。');
+   });
+  };
+ });
+}
 function disconnectFeedback(){
  modal('<h2>断开反馈连接</h2><p>服务器里已保存的反馈会保留，断开后不再发送或读取回复。</p><form id="disconnectform"><div class="field"><label for="disconnectpw">当前登录密码</label><input id="disconnectpw" type="password" autocomplete="current-password" required></div><button>确认断开</button></form>');
  $('#disconnectform').onsubmit=e=>{e.preventDefault();action(async()=>{await api('/api/feedback/settings','DELETE',{password:$('#disconnectpw').value});feedbackData=null;$('#modal').close();message('已断开反馈连接。')})};

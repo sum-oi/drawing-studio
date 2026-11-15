@@ -3,7 +3,7 @@
 自托管的绘画练习室：把课程、练习记录、作品和复盘放在同一处。
 适合在 iPad 与 PC 上使用同一个账号，按自己的节奏练习。
 
-**公开测试版：0.4.0-beta.1。** 当前每个实例支持一个私人账号。
+**公开测试版：0.4.0-beta.2。** 当前每个实例支持一个私人账号。
 
 ## 功能
 
@@ -23,7 +23,7 @@ JSON 导出目前没有一键恢复界面，完整实例通过数据库备份恢
 
 ## Docker 部署
 
-镜像：`sumcheung/drawing-studio:0.4.0-beta.1`。
+镜像：`sumcheung/drawing-studio:0.4.0-beta.2`。
 发布工作流分别测试 `linux/amd64` 和 `linux/arm64` 镜像，
 均通过后才推送固定版本标签。
 
@@ -89,6 +89,8 @@ node server.cjs
 ## 私有用户反馈（可选）
 
 基础课程、记录与作品功能无需额外配置。反馈连接在网页中设置，无需修改 Compose：
+
+打开“账户与备份 → 设置反馈连接”，展开“查看详细教程：创建令牌并连接”，可跟着网页上的步骤操作。
 
 1. 在 GitHub 创建独立的私有仓库，并开启 Issues。
 2. 创建仅能访问该仓库的 fine-grained personal access token，授予 **Issues: Read and write**；Metadata 保留默认读取权限。

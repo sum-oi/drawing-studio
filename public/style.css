@@ -10,3 +10,15 @@
 @media(max-width:1100px){.lesson-layout{grid-template-columns:minmax(0,1fr) 260px;gap:32px}.nav{gap:12px}.nav button{white-space:nowrap}}
 @media(max-width:850px){.lesson-layout{grid-template-columns:1fr}.lesson-sidebar{display:grid;grid-template-columns:1fr 1fr}.course-topics{grid-template-columns:repeat(2,minmax(0,1fr))}.sidebar{display:block}.nav{overflow-x:auto;justify-content:flex-start;gap:20px}.lesson-heading h2{font-size:30px}}
 @media(max-width:560px){.lesson-layout{margin-top:16px}.lesson-sidebar{grid-template-columns:1fr}.lesson-heading h2{font-size:28px}.lesson-heading>p{font-size:16px}.drawing-steps li{padding-left:40px}.course-topics{gap:8px;margin-bottom:32px}.course-topics button{padding:14px}.course-topics span{font-size:16px}.course-topics small{font-size:12px}.course-toolbar,.feedback-invite{align-items:flex-start;flex-direction:column;gap:12px}.lesson-row{align-items:flex-start;gap:16px;flex-direction:column}.lesson-row h3{font-size:21px}.lesson-row button{align-self:flex-end}.worked-example{padding:16px}.feedback-replies{padding-left:16px}}
+
+.feedback-guide {
+ margin-top: 16px;
+ padding: 12px 16px;
+ border: 1px solid var(--line);
+ font-size: 14px;
+}
+.feedback-guide summary { cursor: pointer; font-weight: 600; padding-block: 6px; }
+.feedback-guide ol { padding-left: 22px; }
+.feedback-guide li + li { margin-top: 12px; }
+.feedback-guide a { color: var(--teal); }
+.feedback-guide code { overflow-wrap: anywhere; }
