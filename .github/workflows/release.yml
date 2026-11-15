@@ -1,0 +1,85 @@
+name: Test and publish
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: drawing-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - run: npm test
+      - run: node --check public/app.js
+      - run: node scripts/check-public.cjs
+      - name: Verify release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node -e "if(process.env.RELEASE_TAG!=='v'+require('./package.json').version)process.exit(1)"
+  container:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: sumcheung/drawing-studio:sha-${{ github.sha }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/sum-oi/drawing-studio
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+      - name: Test the exact image to be published
+        env:
+          TEST_IMAGE: sumcheung/drawing-studio:sha-${{ github.sha }}-${{ matrix.arch }}
+        run: node scripts/container-smoke.cjs "$TEST_IMAGE"
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          username: sumcheung
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Push tested image
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TEST_IMAGE: sumcheung/drawing-studio:sha-${{ github.sha }}-${{ matrix.arch }}
+        run: docker push "$TEST_IMAGE"
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: container
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          username: sumcheung
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish and verify multi-platform version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          docker buildx imagetools create --tag "sumcheung/drawing-studio:$VERSION" "sumcheung/drawing-studio:sha-$SOURCE_SHA-amd64" "sumcheung/drawing-studio:sha-$SOURCE_SHA-arm64"
+          docker buildx imagetools inspect "sumcheung/drawing-studio:$VERSION"

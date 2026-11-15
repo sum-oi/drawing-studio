@@ -1,0 +1,19 @@
+{
+  "name": "drawing-studio",
+  "version": "0.3.0-beta.1",
+  "private": true,
+  "license": "MIT",
+  "description": "Self-hosted drawing practice, lessons, artwork journal and progress tracking.",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node server.cjs",
+    "test": "node --test server.test.cjs",
+    "test:container": "node scripts/container-smoke.cjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sum-oi/drawing-studio.git"
+  }
+}

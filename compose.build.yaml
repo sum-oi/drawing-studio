@@ -1,0 +1,4 @@
+services:
+  drawing-studio:
+    build: .
+    image: drawing-studio:local

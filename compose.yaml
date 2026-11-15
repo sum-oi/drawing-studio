@@ -1,0 +1,18 @@
+services:
+  drawing-studio:
+    image: sumcheung/drawing-studio:${IMAGE_TAG:-0.3.0-beta.1}
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:4175:4175"
+    environment:
+      APP_ORIGINS: "${APP_ORIGINS:?Set the actual application URL in .env}"
+      COOKIE_SECURE: "${COOKIE_SECURE:-true}"
+      INIT_USERNAME: "${INIT_USERNAME:-artist}"
+    volumes:
+      - studio-data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  studio-data:

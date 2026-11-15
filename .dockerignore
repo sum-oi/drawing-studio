@@ -1,0 +1,7 @@
+*
+!server.cjs
+!package.json
+!LICENSE
+!CONTENT_LICENSE.md
+!public/
+!public/**
