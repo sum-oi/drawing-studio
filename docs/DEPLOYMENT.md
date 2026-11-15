@@ -6,7 +6,7 @@
 可用 `docker inspect` 查看挂载，或用：
 `docker compose exec drawing-studio ls /app/data`。
 
-目录包括 SQLite 数据库、WAL/SHM（运行时可能存在）、首次登录文件。
+目录包括 SQLite 数据库、WAL/SHM（运行时可能存在）、首次登录文件，以及可选的私有反馈连接文件 `feedback-settings.json`。
 不要公开或提交这个目录。
 
 ## 创建可恢复的完整备份
@@ -21,7 +21,7 @@ docker compose start drawing-studio
 ```
 
 确认 tar 命令成功，并用 `tar -tzf backups/studio-data.tar.gz` 检查内容。
-备份包含账号和作品，存放在私人目录。正式使用时按日期另存，避免覆盖唯一备份。
+备份包含账号、作品及反馈连接凭据，存放在私人目录。正式使用时按日期另存，避免覆盖唯一备份。
 
 ## 恢复
 

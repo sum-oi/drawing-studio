@@ -1,6 +1,6 @@
 services:
   drawing-studio:
-    image: sumcheung/drawing-studio:0.3.0-beta.4
+    image: sumcheung/drawing-studio:0.4.0-beta.1
     restart: unless-stopped
     ports:
       - "4175:4175"

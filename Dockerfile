@@ -1,6 +1,6 @@
 FROM node:24-bookworm-slim
 WORKDIR /app
-COPY --chown=node:node server.cjs package.json LICENSE CONTENT_LICENSE.md ./
+COPY --chown=node:node server.cjs feedback.cjs package.json LICENSE CONTENT_LICENSE.md ./
 COPY --chown=node:node public ./public
 RUN mkdir -p /app/data && chown node:node /app/data
 USER node

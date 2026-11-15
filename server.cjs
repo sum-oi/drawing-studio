@@ -4,7 +4,7 @@ const {DatabaseSync}=require('node:sqlite');
 const {randomBytes,randomUUID,scryptSync,timingSafeEqual,createHash}=require('node:crypto');
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const fail=(status,message)=>Object.assign(new Error(message),{status});
-function createApp({dataDir=process.env.DATA_DIR||path.join(__dirname,'data'),origins=process.env.APP_ORIGINS||'',secure=process.env.COOKIE_SECURE||'auto',username=process.env.INIT_USERNAME||'artist',initialPassword}={}){
+function createApp({dataDir=process.env.DATA_DIR||path.join(__dirname,'data'),origins=process.env.APP_ORIGINS||'',secure=process.env.COOKIE_SECURE||'auto',username=process.env.INIT_USERNAME||'artist',initialPassword,feedbackFetch}={}){
  if(!/^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$/.test(username))throw Error('INIT_USERNAME must be 3-32 letters, digits, dots, underscores or hyphens.');
  const originList=origins.split(',').map(s=>s.trim()).filter(Boolean);
  if(![true,false,'true','false','auto'].includes(secure))throw Error('COOKIE_SECURE must be auto, true or false.');
@@ -18,10 +18,14 @@ function createApp({dataDir=process.env.DATA_DIR||path.join(__dirname,'data'),or
  if(!db.prepare('SELECT id FROM account').get()){
   const password=initialPassword||randomBytes(18).toString('base64url'),salt=randomBytes(16).toString('hex');
   db.prepare('INSERT INTO account(id,salt,password,username) VALUES(1,?,?,?)').run(salt,scryptSync(password,salt,64).toString('hex'),username);
-  db.prepare('INSERT INTO progress VALUES(1,0,?)').run(JSON.stringify({current:'M1',completed:[],sessions:[],passed:[]}));
+  db.prepare('INSERT INTO progress VALUES(1,0,?)').run(JSON.stringify({current:'D85',completed:[],sessions:[],passed:[]}));
   if(!initialPassword)fs.writeFileSync(path.join(dataDir,'bootstrap.txt'),'Username: '+username+'\nPassword: '+password+'\nChange this password after the first login.\n',{mode:0o600});
  }
  db.prepare('UPDATE account SET username=? WHERE username IS NULL').run(username);
+ const progressRow=db.prepare('SELECT data FROM progress WHERE id=1').get();
+ const oldProgress=JSON.parse(progressRow.data);
+ if(/^M[1-4]$/.test(oldProgress.current)){oldProgress.current='D85';db.prepare('UPDATE progress SET data=?,revision=revision+1 WHERE id=1').run(JSON.stringify(oldProgress));}
+ const feedback=require('./feedback.cjs')({db,dataDir,fetcher:feedbackFetch});
  let accountName=db.prepare('SELECT username FROM account').get().username;
  const allowed=new Set(originList),attempts=new Map();
  function acceptsOrigin(req){
@@ -84,6 +88,22 @@ function createApp({dataDir=process.env.DATA_DIR||path.join(__dirname,'data'),or
      fs.rmSync(path.join(dataDir,'bootstrap.txt'),{force:true});
      return json(res,200,{ok:true,username:accountName});
     }
+    if(p.startsWith('/api/feedback')){
+     if(p==='/api/feedback'&&req.method==='GET')return json(res,200,feedback.list());
+     if(p==='/api/feedback/settings'&&req.method==='GET')return json(res,200,feedback.settings());
+     if(p==='/api/feedback/settings'&&['POST','DELETE'].includes(req.method)){
+      const input=await body(req,4096);
+      const result=await feedback.lock(async()=>{
+       const a=db.prepare('SELECT * FROM account').get();
+       if(!db.prepare('SELECT token FROM auth WHERE token=? AND expires>?').get(hash(token),Date.now()))throw fail(401,'请重新登录。');
+       if(typeof input.password!=='string'||input.password.length>256||!timingSafeEqual(scryptSync(input.password,a.salt,64),Buffer.from(a.password,'hex')))throw fail(400,'当前密码不正确。');
+       return req.method==='DELETE'?feedback.disconnect():feedback.configure(input);
+      });return json(res,200,result);
+     }
+     if(p==='/api/feedback'&&req.method==='POST'){const input=await body(req,40000);return json(res,201,await feedback.lock(()=>feedback.create(input)));}
+     const entry=p.match(/^\/api\/feedback\/([a-f0-9-]{36})\/(reply|sync)$/);
+     if(entry&&req.method==='POST'){const input=await body(req,40000);return json(res,200,await feedback.lock(()=>entry[2]==='reply'?feedback.reply(entry[1],input):feedback.sync(entry[1])));}
+    }
     if(p==='/api/state'&&req.method==='GET')return json(res,200,state());
     if(p==='/api/state'&&req.method==='PUT'){const b=await body(req,2*1024*1024);const data=validate(b.state);revision(b.revision);update(data);return json(res,200,state());}
     if(p==='/api/art'&&req.method==='POST'){
@@ -97,13 +117,13 @@ function createApp({dataDir=process.env.DATA_DIR||path.join(__dirname,'data'),or
     const art=p.match(/^\/api\/art\/([a-f0-9-]{36})$/);
     if(art&&req.method==='GET'){const a=db.prepare('SELECT mime,body FROM artworks WHERE id=?').get(art[1]);if(!a)throw fail(404,'作品不存在。');res.writeHead(200,{'Content-Type':a.mime});return res.end(Buffer.from(a.body));}
     if(art&&req.method==='DELETE'){const b=await body(req,4096);revision(b.revision);db.exec('BEGIN IMMEDIATE');try{db.prepare('DELETE FROM artworks WHERE id=?').run(art[1]);db.exec('UPDATE progress SET revision=revision+1');db.exec('COMMIT')}catch(e){db.exec('ROLLBACK');throw e}return json(res,200,state());}
-    if(p==='/api/export'&&req.method==='GET'){const data=state();data.art=data.art.map(a=>{const row=db.prepare('SELECT mime,body FROM artworks WHERE id=?').get(a.id);return {...a,image:'data:'+row.mime+';base64,'+Buffer.from(row.body).toString('base64')};});res.setHeader('Content-Disposition','attachment; filename="drawing-backup.json"');return json(res,200,{schemaVersion:1,...data});}
+    if(p==='/api/export'&&req.method==='GET'){const data=state();data.art=data.art.map(a=>{const row=db.prepare('SELECT mime,body FROM artworks WHERE id=?').get(a.id);return {...a,image:'data:'+row.mime+';base64,'+Buffer.from(row.body).toString('base64')};});res.setHeader('Content-Disposition','attachment; filename="drawing-backup.json"');return json(res,200,{schemaVersion:1,...data,feedback:feedback.export()});}
     throw fail(404,'接口不存在。');
    }
    if(!['GET','HEAD'].includes(req.method))throw fail(405,'方法不支持。');
    if(!files[p])throw fail(404,'页面不存在。');
    const [f,mime]=files[p];res.writeHead(200,{'Content-Type':mime+'; charset=utf-8'});res.end(req.method==='HEAD'?undefined:fs.readFileSync(path.join(__dirname,f)));
-  }catch(e){json(res,e.status||500,{error:e.status?e.message:'保存失败，请稍后重试。'});}
+  }catch(e){json(res,e.status||500,{error:e.status?e.message:'保存失败，请稍后重试。',...(e.code==='FEEDBACK_REQUEST_CHANGED'?{code:e.code}:{})});}
  });
  server.requestTimeout=30000;server.headersTimeout=15000;
  return {server,close:()=>new Promise(resolve=>server.close(()=>{db.close();resolve()}))};

@@ -1,5 +1,63 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const {createApp}=require('./server.cjs');
+
+test('private feedback: auth, local persistence, uncertain retry, replies, private guard and secret exclusion',async()=>{
+ const base=fs.mkdtempSync(path.join(os.tmpdir(),'drawing-studio-test-')),password='Feedback-long-test-password!',token='test-only-provider-secret';
+ let privateRepo=true,loseIssueResponse=false,loseCommentResponse=false,issues=[],comments=[],posts=0;
+ const feedbackFetch=async(url,options)=>{
+  assert.ok(url.startsWith('https://api.github.com/repos/test/private'));assert.equal(options.redirect,'error');assert.equal(options.headers.Authorization,'Bearer '+token);
+  const p=new URL(url).pathname,method=options.method;
+  let value;
+  if(p==='/repos/test/private')value={private:privateRepo,has_issues:true,permissions:{push:true}};
+  else if(p.endsWith('/issues')&&method==='GET')value=issues;
+  else if(p.endsWith('/issues')&&method==='POST'){
+   posts++;value={number:1,state:'open',...JSON.parse(options.body)};issues.push(value);
+   if(loseIssueResponse){loseIssueResponse=false;throw Error(token)}
+  }else if(p.endsWith('/comments')&&method==='GET')value=comments;
+  else if(p.endsWith('/comments')&&method==='POST'){
+   value={id:comments.length+1,user:{login:'test'},created_at:new Date().toISOString(),...JSON.parse(options.body)};comments.push(value);
+   if(loseCommentResponse){loseCommentResponse=false;throw Error(token)}
+  }else value=issues[0];
+  return {ok:true,json:async()=>structuredClone(value)};
+ };
+ let app=createApp({dataDir:base,initialPassword:password,feedbackFetch}),cookie;
+ await new Promise(r=>app.server.listen(0,'127.0.0.1',r));let url='http://127.0.0.1:'+app.server.address().port;
+ const req=async(p,method='GET',data,auth=true)=>{const r=await fetch(url+p,{method,headers:{Origin:url,'Content-Type':'application/json',...(auth&&cookie?{Cookie:cookie}:{})},body:data?JSON.stringify(data):undefined});return {status:r.status,data:await r.json(),headers:r.headers}};
+ const login=async()=>{const r=await req('/api/login','POST',{username:'artist',password});cookie=r.headers.get('set-cookie').split(';')[0]};
+ try{
+  assert.equal((await req('/api/feedback')).status,401);await login();
+  const submission={requestId:'e353659e-2b5c-4b53-b377-ea9a9f659711',title:'看不懂这一步',body:'请解释怎样确定人物位置。',lesson:'D85'};
+  let r=await req('/api/feedback','POST',submission);assert.equal(r.status,201);
+  const id=r.data.items[0].id;assert.equal(r.data.items[0].status,'local');assert.ok(r.data.items[0].error);
+  assert.equal(id,submission.requestId);
+  r=await req('/api/feedback','POST',submission);assert.equal(r.data.items.length,1);assert.equal(posts,0);
+  assert.equal((await req('/api/feedback','POST',{...submission,title:'同编号不同标题'})).status,400);
+  assert.equal((await req('/api/feedback','POST',{...submission,requestId:'invalid'})).status,400);
+  assert.equal((await req('/api/feedback/settings','POST',{password:'wrong',repo:'test/private',token})).status,400);
+  privateRepo=false;assert.equal((await req('/api/feedback/settings','POST',{password,repo:'test/private',token})).status,400);assert.equal(posts,0);
+  privateRepo=true;r=await req('/api/feedback/settings','POST',{password,repo:'test/private',token});assert.equal(r.status,200);assert.equal(r.data.configured,true);
+  loseIssueResponse=true;r=await req('/api/feedback/'+id+'/sync','POST',{});assert.equal(r.status,200);assert.ok(r.data.items[0].error);assert.equal(posts,1);assert.ok(!JSON.stringify(r.data).includes(token));
+  await app.close();app=createApp({dataDir:base,feedbackFetch});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));url='http://127.0.0.1:'+app.server.address().port;
+  r=await req('/api/feedback','POST',submission);assert.equal(r.data.items.length,1);assert.equal(posts,1);
+  r=await req('/api/feedback/'+id+'/sync','POST',{});assert.equal(r.data.items[0].issueNumber,1);assert.equal(posts,1);assert.equal(r.data.items[0].status,'open');
+  r=await req('/api/feedback','POST',submission);assert.equal(r.data.items.length,1);assert.equal(posts,1);
+  const supplement={requestId:'a1ba25a9-07c2-459d-ac3b-ef0d2bc09553',body:'我已经试过把人物放左边。'};
+  loseCommentResponse=true;r=await req('/api/feedback/'+id+'/reply','POST',supplement);assert.ok(r.data.items[0].comments[0].pending);
+  r=await req('/api/feedback/'+id+'/reply','POST',supplement);assert.equal(r.data.items[0].comments.length,1);assert.equal(comments.length,1);
+  assert.equal((await req('/api/feedback/'+id+'/reply','POST',{...supplement,body:'同编号不同内容'})).status,400);
+  await req('/api/feedback/'+id+'/sync','POST',{});assert.equal(comments.length,1);
+  r=await req('/api/feedback/'+id+'/reply','POST',supplement);assert.equal(comments.length,1);assert.equal(r.data.items[0].comments[0].clientId,supplement.requestId);assert.equal(r.data.items[0].comments[0].author,'使用者');
+  await app.close();app=createApp({dataDir:base,feedbackFetch});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));url='http://127.0.0.1:'+app.server.address().port;
+  r=await req('/api/feedback/'+id+'/reply','POST',supplement);assert.equal(r.data.items[0].comments.length,1);assert.equal(comments.length,1);
+  assert.equal((await req('/api/feedback/'+id+'/reply','POST',{...supplement,body:'重启后不同内容'})).status,400);
+  comments.push({id:2,body:'可以先把人物缩小一半再比较。',created_at:new Date().toISOString(),user:{login:'maintainer'}});issues[0].state='closed';
+  r=await req('/api/feedback/'+id+'/sync','POST',{});assert.equal(r.data.items[0].status,'closed');assert.equal(r.data.items[0].comments[1].author,'maintainer');assert.ok(!r.data.items[0].comments[0].body.includes('<!--'));
+  privateRepo=false;r=await req('/api/feedback/'+id+'/reply','POST',{body:'仓库变公开时不要发送我。'});assert.ok(r.data.items[0].error.includes('私有'));assert.equal(comments.length,2);
+  r=await req('/api/export');assert.equal(r.data.feedback.length,1);assert.ok(!JSON.stringify(r.data).includes(token));
+  assert.equal((await req('/feedback-settings.json')).status,404);
+  await req('/api/feedback/settings','DELETE',{password});assert.equal(fs.existsSync(path.join(base,'feedback-settings.json')),false);assert.equal((await req('/api/feedback')).data.items.length,1);
+ }finally{await app.close();assert.ok(path.resolve(base).startsWith(path.resolve(os.tmpdir())+path.sep+'drawing-studio-test-'));fs.rmSync(base,{recursive:true,force:true})}
+});
 test('zero-config LAN and HTTPS proxy login, save, logout and cross-site rejection',async()=>{
  const base=fs.mkdtempSync(path.join(os.tmpdir(),'drawing-studio-test-')),password='Test-only-long-password!';
  const app=createApp({dataDir:base,origins:'',secure:'auto',initialPassword:password});
@@ -43,7 +101,7 @@ test('real HTTP: login, private artwork, cross-device state, conflicts, restart,
   let s=await (await req('/api/state',{cookie:a})).json();
   const row={id:'one',lesson:'M1',date:'2026-11-15',minutes:30,note:'测试复盘'};
   let r=await req('/api/state',{method:'PUT',cookie:a,data:{revision:s.revision,state:{...s,sessions:[row]}}});assert.equal(r.status,200);s=await r.json();
-  assert.equal(s.current,'M1');assert.deepEqual(s.completed,[]);
+  assert.equal(s.current,'D85');assert.deepEqual(s.completed,[]);
   const second=await (await req('/api/state',{cookie:b})).json();assert.deepEqual(second.sessions,[row]);
   assert.equal((await req('/api/state',{method:'PUT',cookie:b,data:{revision:0,state:second}})).status,409);
   r=await req('/api/state',{method:'PUT',cookie:a,data:{revision:s.revision,state:{...s,current:'M2',completed:['M1']}}});assert.equal(r.status,200);s=await r.json();
@@ -54,7 +112,7 @@ test('real HTTP: login, private artwork, cross-device state, conflicts, restart,
   assert.equal((await req('/api/art',{method:'POST',cookie:a,data:{revision:s.revision,image:'data:image/png;base64,'+Buffer.from('not a valid image body').toString('base64'),title:'bad',type:'草图',lesson:'M1',note:''}})).status,400);
   const exported=await (await req('/api/export',{cookie:a})).json();assert.equal(exported.art[0].image,image);
   await app.close();app=createApp({dataDir:base,origins:'http://test.local'});url=await listen();
-  s=await (await req('/api/state',{cookie:b})).json();assert.equal(s.current,'M2');assert.equal(s.art.length,1);assert.equal(s.sessions.length,1);
+  s=await (await req('/api/state',{cookie:b})).json();assert.equal(s.current,'D85');assert.deepEqual(s.completed,['M1']);assert.equal(s.art.length,1);assert.equal(s.sessions.length,1);
   r=await req('/api/art/'+id,{method:'DELETE',cookie:b,data:{revision:s.revision}});assert.equal(r.status,200);assert.equal((await r.json()).art.length,0);
   assert.equal((await req('/api/art/'+id,{cookie:b})).status,404);
   r=await req('/api/password',{method:'POST',cookie:b,data:{old:password,password:'Changed-long-password!'}});assert.equal(r.status,200);
